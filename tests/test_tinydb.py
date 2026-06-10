@@ -342,6 +342,68 @@ def test_update_multiple_operation(db: TinyDB):
     assert db.count(where('int') == 2) == 2
 
 
+def test_update_multiple_with_generator(db: TinyDB):
+    """Regression: update_multiple must work when passed a generator
+    (not just a list). Previously, the generator was exhausted on the
+    first document, so subsequent documents were never updated."""
+
+    def gen():
+        yield ({'int': 2}, where('char') == 'a')
+        yield ({'int': 4}, where('char') == 'b')
+
+    updated_ids = db.update_multiple(gen())
+
+    # Both rules must have been applied
+    assert db.count(where('int') == 2) == 1
+    assert db.count(where('int') == 4) == 1
+    # Unmatched document stays at 1
+    assert db.count(where('int') == 1) == 1
+
+    # Returned IDs must be correct and deduplicated
+    assert len(updated_ids) == 2
+    assert len(set(updated_ids)) == 2
+
+
+def test_update_multiple_no_duplicate_ids(db: TinyDB):
+    """Regression: if a single document matches multiple update rules,
+    its ID must appear only once in the returned list."""
+
+    # Two rules targeting overlapping documents — char values don't change
+    # between rules, so both rules match the same docs.
+    updated_ids = db.update_multiple([
+        ({'int': 10}, where('char') == 'a'),
+        ({'int': 20}, where('char') == 'a'),   # same doc matches again
+    ])
+
+    # Only doc 'a' matches; its ID must appear exactly once.
+    assert len(updated_ids) == 1
+    assert len(set(updated_ids)) == 1
+
+    # The last matching rule wins for the actual value
+    assert db.count(where('int') == 20) == 1
+
+
+def test_update_multiple_generator_with_callable(db: TinyDB):
+    """Generator input combined with callable transforms must work
+    end-to-end."""
+
+    def increment(field):
+        def transform(el):
+            el[field] += 1
+        return transform
+
+    def gen():
+        yield (increment('int'), where('char') == 'a')
+        yield (increment('int'), where('char') == 'b')
+
+    updated_ids = db.update_multiple(gen())
+
+    assert db.count(where('int') == 2) == 2
+    assert db.count(where('int') == 1) == 1
+    assert len(updated_ids) == 2
+    assert len(set(updated_ids)) == 2
+
+
 def test_upsert(db: TinyDB):
     assert len(db) == 3
 
