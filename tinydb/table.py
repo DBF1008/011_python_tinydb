@@ -184,7 +184,36 @@ class Table:
         doc_ids = []
 
         def updater(table: dict):
-            for document in documents:
+            # Materialize the iterable so we can iterate over it twice
+            # (once to collect explicit IDs, once to insert).
+            # This is necessary because generators can only be iterated once.
+            docs = list(documents)
+
+            # To avoid collisions between auto-assigned IDs and explicit
+            # doc_ids within the same batch, we track all explicit doc_ids
+            # and skip over them when assigning auto IDs.
+            #
+            # NOTE: We must NOT call ``self._get_next_id()`` here because
+            # it reads from storage, which has not been written yet at
+            # this point (the whole batch is applied inside a single
+            # ``_update_table`` call).  Instead we manage a local counter.
+
+            # Collect all explicit doc_ids that appear in the batch so we
+            # can avoid collisions when assigning auto IDs.
+            explicit_ids: set[int] = set()
+            for document in docs:
+                if isinstance(document, self.document_class):
+                    explicit_ids.add(document.doc_id)
+
+            # Determine the starting point for auto-assigned IDs.
+            # We start from max(existing keys) + 1, or 1 if table is empty.
+            existing_max = max(
+                (self.document_id_class(k) for k in table.keys()),
+                default=0
+            )
+            next_auto_id = existing_max + 1
+
+            for document in docs:
 
                 # Make sure the document implements the ``Mapping`` interface
                 if not isinstance(document, Mapping):
@@ -206,15 +235,25 @@ class Table:
                     table[doc_id] = dict(document)
                     continue
 
-                # Generate new document ID for this document
+                # Generate new document ID for this document.
+                # Skip any IDs that are used by explicit doc_ids in this batch.
+                while next_auto_id in explicit_ids:
+                    next_auto_id += 1
+
                 # Store the doc_id, so we can return all document IDs
                 # later, then save the document with the new doc_id
-                doc_id = self._get_next_id()
+                doc_id = next_auto_id
+                next_auto_id += 1
                 doc_ids.append(doc_id)
                 table[doc_id] = dict(document)
 
         # See below for details on ``Table._update``
         self._update_table(updater)
+
+        # Reset the cached next-ID counter so the next call to
+        # ``_get_next_id()`` re-reads from storage and picks up all
+        # IDs (both explicit and auto-assigned) that were just written.
+        self._next_id = None
 
         return doc_ids
 

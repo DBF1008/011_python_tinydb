@@ -1,5 +1,6 @@
 import re
 from collections.abc import Mapping
+from pathlib import Path
 
 import pytest
 
@@ -761,3 +762,162 @@ def test_lambda_query():
     query.is_cacheable = lambda: False
     assert db.search(query) == [{'foo': 'bar'}]
     assert not db._query_cache
+
+
+def test_insert_multiple_mixed_doc_ids_no_collision(db: TinyDB):
+    """
+    Regression test: mixing Document (with explicit doc_id) and plain dict
+    in the same insert_multiple batch should not cause ID collisions.
+
+    Tests the scenario where explicit doc_ids are higher than what would be
+    auto-assigned, ensuring auto-assigned IDs don't collide with them.
+    """
+    db.drop_tables()
+
+    # Mix explicit doc_id=10 with plain dicts
+    ids = db.insert_multiple([
+        Document({'name': 'explicit'}, 10),
+        {'name': 'auto1'},
+        {'name': 'auto2'},
+    ])
+
+    # Explicit ID should be 10, auto IDs should be 1 and 2 (skipping 10)
+    assert ids == [10, 1, 2]
+
+    # Verify all documents are accessible
+    assert db.get(doc_id=10) == {'name': 'explicit'}
+    assert db.get(doc_id=1) == {'name': 'auto1'}
+    assert db.get(doc_id=2) == {'name': 'auto2'}
+
+    # Subsequent insert should get ID 11 (max is 10, so next is 11)
+    next_id = db.insert({'name': 'after'})
+    assert next_id == 11
+    assert db.get(doc_id=11) == {'name': 'after'}
+
+
+def test_insert_multiple_mixed_order(db: TinyDB):
+    """
+    Test that mixing explicit and auto-assigned IDs in various orders
+    produces correct, non-colliding IDs.
+    """
+    db.drop_tables()
+
+    # Explicit IDs scattered: 5, 100, 2
+    ids = db.insert_multiple([
+        Document({'v': 1}, 5),
+        {'v': 2},
+        Document({'v': 3}, 100),
+        {'v': 4},
+        Document({'v': 5}, 2),
+        {'v': 6},
+    ])
+
+    # All IDs should be unique
+    assert len(ids) == len(set(ids))
+
+    # Explicit IDs should be preserved
+    assert 5 in ids
+    assert 100 in ids
+    assert 2 in ids
+
+    # Auto-assigned IDs should skip over explicit IDs
+    # Expected: [5, 1, 100, 3, 2, 4]
+    assert ids == [5, 1, 100, 3, 2, 4]
+
+    # All documents should be accessible by their IDs
+    for i, doc_id in enumerate(ids, 1):
+        assert db.get(doc_id=doc_id) == {'v': i}
+
+
+def test_insert_multiple_then_reopen_and_insert(tmp_path: Path):
+    """
+    Regression test: after insert_multiple with mixed explicit/auto IDs,
+    reopening the database and inserting more documents should not cause
+    ID collisions.
+
+    This test only runs with JSON storage (requires persistence).
+    """
+    path = tmp_path / 'test.db'
+
+    # First session: insert mixed batch
+    with TinyDB(path, storage=JSONStorage) as db:
+        db.insert_multiple([
+            Document({'x': 1}, 50),
+            {'x': 2},
+            Document({'x': 3}, 10),
+        ])
+
+    # Second session: insert more documents
+    with TinyDB(path, storage=JSONStorage) as db:
+        # Should not collide with 50, 10, or auto-assigned ID from first session
+        new_id = db.insert({'x': 4})
+
+        # Verify no collision
+        assert new_id not in (50, 10)
+
+        # Verify all documents are accessible
+        assert len(db) == 4
+        ids = [doc.doc_id for doc in db.all()]
+        assert len(ids) == len(set(ids))  # All unique
+
+
+def test_upsert_with_explicit_doc_id_no_collision(db: TinyDB):
+    """
+    Test that upsert with an explicit doc_id that doesn't exist yet
+    falls through to insert and doesn't cause ID collisions.
+    """
+    db.drop_tables()
+
+    # Insert some documents first
+    db.insert_multiple([{'a': 1}, {'a': 2}])
+
+    # Upsert with explicit doc_id that doesn't exist
+    result = db.upsert(Document({'b': 1}, 100))
+    assert result == [100]
+    assert db.get(doc_id=100) == {'b': 1}
+
+    # Subsequent insert should not collide with 100
+    next_id = db.insert({'c': 3})
+    assert next_id != 100
+    assert db.get(doc_id=next_id) == {'c': 3}
+
+
+def test_insert_multiple_empty_table_with_explicit_ids(db: TinyDB):
+    """
+    Test insert_multiple on an empty table with only explicit doc_ids.
+    """
+    db.drop_tables()
+
+    ids = db.insert_multiple([
+        Document({'x': 1}, 100),
+        Document({'x': 2}, 200),
+        Document({'x': 3}, 50),
+    ])
+
+    assert ids == [100, 200, 50]
+
+    # Subsequent auto-assigned ID should be > 200
+    next_id = db.insert({'x': 4})
+    assert next_id > 200
+
+
+def test_insert_multiple_all_auto_then_explicit(db: TinyDB):
+    """
+    Test that when all auto-assigned IDs come before an explicit ID,
+    the explicit ID doesn't break the sequence.
+    """
+    db.drop_tables()
+
+    ids = db.insert_multiple([
+        {'x': 1},
+        {'x': 2},
+        {'x': 3},
+        Document({'x': 4}, 10),
+    ])
+
+    # First three should be 1, 2, 3; explicit should be 10
+    assert ids == [1, 2, 3, 10]
+
+    # Next insert should be 11
+    next_id = db.insert({'x': 5})
+    assert next_id == 11
