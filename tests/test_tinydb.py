@@ -342,6 +342,39 @@ def test_update_multiple_operation(db: TinyDB):
     assert db.count(where('int') == 2) == 2
 
 
+def test_update_multiple_with_generator(db: TinyDB):
+    assert len(db) == 3
+
+    # Pass updates as a generator – all rules must take effect
+    def gen():
+        yield ({'int': 2}, where('char') == 'a')
+        yield ({'int': 3}, where('char') == 'b')
+        yield ({'int': 4}, where('char') == 'c')
+
+    updated = db.update_multiple(gen())
+
+    assert db.count(where('int') == 2) == 1
+    assert db.count(where('int') == 3) == 1
+    assert db.count(where('int') == 4) == 1
+    assert db.count(where('int') == 1) == 0
+    assert sorted(updated) == [1, 2, 3]
+
+
+def test_update_multiple_no_duplicate_ids(db: TinyDB):
+    # Two rules that match the same document should update it twice
+    # but return its ID only once
+    updated = db.update_multiple([
+        ({'int': 2}, where('char') == 'a'),
+        ({'extra': True}, where('char') == 'a'),
+    ])
+
+    assert updated == [1]
+
+    doc = db.get(doc_id=1)
+    assert doc['int'] == 2
+    assert doc['extra'] is True
+
+
 def test_upsert(db: TinyDB):
     assert len(db) == 3
 

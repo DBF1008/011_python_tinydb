@@ -531,23 +531,29 @@ class Table:
         # Perform the update operation for documents specified by a query
 
         # Collect affected doc_ids
-        updated_ids = []
+        updated_ids: list[int] = []
 
         def updater(table: dict):
+            # Materialize the updates iterable so it can be iterated
+            # multiple times (important when a generator is passed in)
+            updates_list = list(updates)
+
             # We need to convert the keys iterator to a list because
             # we may remove entries from the ``table`` dict during
             # iteration and doing this without the list conversion would
             # result in an exception (RuntimeError: dictionary changed size
             # during iteration)
-            for doc_id in list(table.keys()):
-                for fields, cond in updates:
-                    _cond = cast(QueryLike, cond)
+            for fields, cond in updates_list:
+                _cond = cast(QueryLike, cond)
 
-                    # Pass through all documents to find documents matching the
-                    # query. Call the processing callback with the document ID
+                for doc_id in list(table.keys()):
+                    # Pass through all documents to find documents matching
+                    # the query. Call the processing callback with the
+                    # document ID
                     if _cond(table[doc_id]):
-                        # Add ID to list of updated documents
-                        updated_ids.append(doc_id)
+                        # Track this doc_id only once
+                        if doc_id not in updated_ids:
+                            updated_ids.append(doc_id)
 
                         # Perform the update (see above)
                         perform_update(fields, table, doc_id)
