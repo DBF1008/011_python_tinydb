@@ -108,15 +108,23 @@ class Table:
             = self.query_cache_class(capacity=cache_size)
 
         self._next_id = None
+        self._dropped: bool = False
         if persist_empty:
             self._update_table(lambda table: table.clear())
 
     def __repr__(self):
-        args = [
-            'name={!r}'.format(self.name),
-            'total={}'.format(len(self)),
-            'storage={}'.format(self._storage),
-        ]
+        if self._dropped:
+            args = [
+                'name={!r}'.format(self.name),
+                'total=<dropped>',
+                'storage={}'.format(self._storage),
+            ]
+        else:
+            args = [
+                'name={!r}'.format(self.name),
+                'total={}'.format(len(self)),
+                'storage={}'.format(self._storage),
+            ]
 
         return '<{} {}>'.format(type(self).__name__, ', '.join(args))
 
@@ -699,6 +707,16 @@ class Table:
 
         self._query_cache.clear()
 
+    def _check_dropped(self) -> None:
+        """
+        Check if the table has been dropped and raise an error if so.
+        """
+        if self._dropped:
+            raise RuntimeError(
+                f"Table '{self.name}' has been dropped and is no longer usable. "
+                f"Obtain a new reference via db.table(name)."
+            )
+
     def __len__(self):
         """
         Count the total number of documents in this table.
@@ -762,6 +780,8 @@ class Table:
         only one document for example.
         """
 
+        self._check_dropped()
+
         # Retrieve the tables from the storage
         tables = self._storage.read()
 
@@ -791,6 +811,8 @@ class Table:
         As a further optimization, we don't convert the documents into the
         document class, as the table data will *not* be returned to the user.
         """
+
+        self._check_dropped()
 
         tables = self._storage.read()
 

@@ -645,6 +645,86 @@ def test_drop_table():
     assert set() == db.tables()
 
 
+def test_drop_table_invalidates_old_reference():
+    """Old Table references should raise after drop; new references work fine."""
+    db = TinyDB(storage=MemoryStorage)
+
+    # --- Named table ---
+    old_tbl = db.table('foo')
+    old_tbl.insert({'x': 1})
+
+    db.drop_table('foo')
+
+    # All operations on old reference should raise RuntimeError
+    with pytest.raises(RuntimeError):
+        old_tbl.insert({'x': 2})
+    with pytest.raises(RuntimeError):
+        old_tbl.all()
+    with pytest.raises(RuntimeError):
+        old_tbl.search(where('x') == 1)
+    with pytest.raises(RuntimeError):
+        len(old_tbl)
+    with pytest.raises(RuntimeError):
+        old_tbl.truncate()
+
+    # New reference should work normally
+    new_tbl = db.table('foo')
+    new_tbl.insert({'x': 10})
+    assert new_tbl.all() == [{'x': 10}]
+    assert len(new_tbl) == 1
+
+
+def test_drop_tables_invalidates_old_references():
+    """Old references should raise after drop_tables; new references work."""
+    db = TinyDB(storage=MemoryStorage)
+
+    old_default = db.table(db.default_table_name)
+    old_named = db.table('bar')
+    old_default.insert({'a': 1})
+    old_named.insert({'b': 2})
+
+    db.drop_tables()
+
+    # Old references should be invalidated
+    with pytest.raises(RuntimeError):
+        old_default.insert({'a': 99})
+    with pytest.raises(RuntimeError):
+        old_named.insert({'b': 99})
+    with pytest.raises(RuntimeError):
+        old_default.all()
+    with pytest.raises(RuntimeError):
+        old_named.search(where('b') == 2)
+
+    # New references should work normally
+    new_default = db.table(db.default_table_name)
+    new_default.insert({'a': 100})
+    assert len(new_default) == 1
+
+    new_named = db.table('bar')
+    new_named.insert({'b': 200})
+    assert len(new_named) == 1
+
+
+def test_drop_table_default_proxy_still_works():
+    """TinyDB proxy API should still work after dropping the default table."""
+    db = TinyDB(storage=MemoryStorage)
+    db.insert({'k': 'v1'})
+
+    # Hold an old reference to the default table
+    old_ref = db.table(db.default_table_name)
+
+    db.drop_table(db.default_table_name)
+
+    # Old reference should be unusable
+    with pytest.raises(RuntimeError):
+        old_ref.all()
+
+    # Proxy API should work (via __getattr__ -> table() creating a new instance)
+    db.insert({'k': 'v2'})
+    assert db.all() == [{'k': 'v2'}]
+    assert len(db) == 1
+
+
 def test_empty_write(tmpdir):
     path = str(tmpdir.join('db.json'))
 

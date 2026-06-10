@@ -165,6 +165,12 @@ class TinyDB(TableBase):
         Drop all tables from the database. **CANNOT BE REVERSED!**
         """
 
+        # Mark all cached table instances as dropped so old references
+        # will raise an error instead of silently resurrecting data.
+        for table in self._tables.values():
+            table._dropped = True
+            table.clear_cache()
+
         # We drop all tables from this database by writing an empty dict
         # to the storage thereby returning to the initial state with no tables.
         self.storage.write({})
@@ -183,6 +189,10 @@ class TinyDB(TableBase):
         # If the table is currently opened, we need to forget the table class
         # instance
         if name in self._tables:
+            # Mark the old instance as dropped so it cannot silently
+            # resurrect the table data through further writes.
+            self._tables[name]._dropped = True
+            self._tables[name].clear_cache()
             del self._tables[name]
 
         data = self.storage.read()

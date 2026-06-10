@@ -44,9 +44,13 @@ def test_multiple_tables(db):
 
     db.drop_tables()
 
-    assert len(table1) == 0
-    assert len(table2) == 0
-    assert len(table3) == 0
+    # Old references should raise RuntimeError
+    with pytest.raises(RuntimeError):
+        len(table1)
+    with pytest.raises(RuntimeError):
+        len(table2)
+    with pytest.raises(RuntimeError):
+        len(table3)
 
 
 def test_caching(db):
