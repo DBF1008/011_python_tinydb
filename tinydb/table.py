@@ -108,15 +108,22 @@ class Table:
             = self.query_cache_class(capacity=cache_size)
 
         self._next_id = None
+        self._closed = False
         if persist_empty:
             self._update_table(lambda table: table.clear())
 
     def __repr__(self):
-        args = [
-            'name={!r}'.format(self.name),
-            'total={}'.format(len(self)),
-            'storage={}'.format(self._storage),
-        ]
+        if self._closed:
+            args = [
+                'name={!r}'.format(self.name),
+                'status=dropped',
+            ]
+        else:
+            args = [
+                'name={!r}'.format(self.name),
+                'total={}'.format(len(self)),
+                'storage={}'.format(self._storage),
+            ]
 
         return '<{} {}>'.format(type(self).__name__, ', '.join(args))
 
@@ -753,6 +760,17 @@ class Table:
 
         return next_id
 
+    def _check_not_closed(self):
+        if self._closed:
+            raise RuntimeError(
+                f"Table '{self._name}' has been dropped; use "
+                f"db.table('{self._name}') to obtain a new instance"
+            )
+
+    def _close(self):
+        self._closed = True
+        self.clear_cache()
+
     def _read_table(self) -> dict[str, Mapping]:
         """
         Read the table data from the underlying storage.
@@ -761,6 +779,8 @@ class Table:
         we may not want to convert *all* documents when returning
         only one document for example.
         """
+
+        self._check_not_closed()
 
         # Retrieve the tables from the storage
         tables = self._storage.read()
@@ -791,6 +811,8 @@ class Table:
         As a further optimization, we don't convert the documents into the
         document class, as the table data will *not* be returned to the user.
         """
+
+        self._check_not_closed()
 
         tables = self._storage.read()
 

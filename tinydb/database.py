@@ -167,6 +167,9 @@ class TinyDB(TableBase):
 
         # We drop all tables from this database by writing an empty dict
         # to the storage thereby returning to the initial state with no tables.
+        for table in self._tables.values():
+            table._close()
+
         self.storage.write({})
 
         # After that we need to remember to empty the ``_tables`` dict, so we'll
@@ -183,6 +186,7 @@ class TinyDB(TableBase):
         # If the table is currently opened, we need to forget the table class
         # instance
         if name in self._tables:
+            self._tables[name]._close()
             del self._tables[name]
 
         data = self.storage.read()

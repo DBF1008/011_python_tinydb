@@ -44,9 +44,12 @@ def test_multiple_tables(db):
 
     db.drop_tables()
 
-    assert len(table1) == 0
-    assert len(table2) == 0
-    assert len(table3) == 0
+    with pytest.raises(RuntimeError):
+        len(table1)
+    with pytest.raises(RuntimeError):
+        len(table2)
+    with pytest.raises(RuntimeError):
+        len(table3)
 
 
 def test_caching(db):
@@ -177,3 +180,75 @@ def test_persist_table(db):
 
     db.table("nonpersisted", persist_empty=False)
     assert "nonpersisted" not in db.tables()
+
+
+def test_drop_table_invalidates_old_ref(db):
+    table = db.table('mytable')
+    table.insert({'x': 1})
+
+    db.drop_table('mytable')
+
+    with pytest.raises(RuntimeError):
+        table.insert({'x': 2})
+
+    with pytest.raises(RuntimeError):
+        table.all()
+
+    with pytest.raises(RuntimeError):
+        table.search(where('x') == 1)
+
+    with pytest.raises(RuntimeError):
+        len(table)
+
+
+def test_drop_table_new_ref_works(db):
+    table_old = db.table('mytable')
+    table_old.insert({'x': 1})
+
+    db.drop_table('mytable')
+
+    table_new = db.table('mytable')
+    assert len(table_new) == 0
+    table_new.insert({'y': 2})
+    assert len(table_new) == 1
+
+
+def test_drop_tables_invalidates_default_table_ref(db):
+    default = db.table(db.default_table_name)
+    default.insert({'a': 1})
+
+    db.drop_tables()
+
+    # Old reference is dead
+    with pytest.raises(RuntimeError):
+        default.insert({'a': 2})
+
+    # Proxy API creates a fresh table and works fine
+    db.insert({'b': 3})
+    assert len(db) == 1
+
+
+def test_drop_table_idempotent(db):
+    table = db.table('mytable')
+    table.insert({'x': 1})
+
+    db.drop_table('mytable')
+    db.drop_table('mytable')  # Second drop: no-op, no error
+
+    with pytest.raises(RuntimeError):
+        table.all()
+
+
+def test_drop_table_repr_after_close(db):
+    table = db.table('mytable')
+    db.drop_table('mytable')
+
+    r = repr(table)
+    assert 'dropped' in r
+    assert 'mytable' in r
+
+
+def test_drop_table_name_property_after_close(db):
+    table = db.table('mytable')
+    db.drop_table('mytable')
+    assert table.name == 'mytable'
