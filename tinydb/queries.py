@@ -345,7 +345,7 @@ class Query(QueryInstance):
 
             return re.match(regex, value, flags) is not None
 
-        return self._generate_test(test, ('matches', self._path, regex))
+        return self._generate_test(test, ('matches', self._path, regex, flags))
 
     def search(self, regex: str, flags: int = 0) -> QueryInstance:
         """
@@ -364,7 +364,7 @@ class Query(QueryInstance):
 
             return re.search(regex, value, flags) is not None
 
-        return self._generate_test(test, ('search', self._path, regex))
+        return self._generate_test(test, ('search', self._path, regex, flags))
 
     def test(self, func: Callable[[Mapping], bool], *args) -> QueryInstance:
         """

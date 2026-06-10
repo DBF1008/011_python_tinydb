@@ -185,6 +185,32 @@ def test_regex():
     assert hash(query)
 
 
+def test_regex_flags_distinction():
+    # matches: different flags must produce different hashes
+    q_sensitive = Query().val.matches(r'hello', flags=0)
+    q_insensitive = Query().val.matches(r'hello', flags=re.IGNORECASE)
+    assert hash(q_sensitive) != hash(q_insensitive)
+    assert q_sensitive != q_insensitive
+
+    assert not q_sensitive({'val': 'Hello'})
+    assert q_insensitive({'val': 'Hello'})
+
+    # search: different flags must produce different hashes
+    q_sensitive = Query().val.search(r'hello', flags=0)
+    q_insensitive = Query().val.search(r'hello', flags=re.IGNORECASE)
+    assert hash(q_sensitive) != hash(q_insensitive)
+    assert q_sensitive != q_insensitive
+
+    assert not q_sensitive({'val': 'say Hello world'})
+    assert q_insensitive({'val': 'say Hello world'})
+
+    # Same flags must still produce equal hashes
+    q1 = Query().val.search(r'hello', flags=re.IGNORECASE)
+    q2 = Query().val.search(r'hello', flags=re.IGNORECASE)
+    assert hash(q1) == hash(q2)
+    assert q1 == q2
+
+
 def test_custom():
     def test(value):
         return value == 42
