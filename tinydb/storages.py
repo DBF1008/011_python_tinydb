@@ -3,9 +3,9 @@ Contains the :class:`base class <tinydb.storages.Storage>` for storages and
 implementations.
 """
 
-import io
 import json
 import os
+import tempfile
 import warnings
 from abc import ABC, abstractmethod
 from typing import Any, Optional
@@ -103,6 +103,8 @@ class JSONStorage(Storage):
         super().__init__()
 
         self._mode = access_mode
+        self._path = path
+        self._encoding = encoding
         self.kwargs = kwargs
 
         if access_mode not in ('r', 'rb', 'r+', 'rb+'):
@@ -140,25 +142,64 @@ class JSONStorage(Storage):
             return json.load(self._handle)
 
     def write(self, data: dict[str, dict[str, Any]]):
-        # Move the cursor to the beginning of the file just in case
-        self._handle.seek(0)
+        # Check write permission upfront to avoid creating temp files for
+        # read-only databases
+        if not self._handle.writable():
+            raise IOError(
+                'Cannot write to the database. '
+                'Access mode is "{0}"'.format(self._mode)
+            )
 
-        # Serialize the database state using the user-provided arguments
+        # Serialize FIRST — if this fails, no file I/O happens and the
+        # existing file remains untouched
         serialized = json.dumps(data, **self.kwargs)
 
-        # Write the serialized data to the file
+        # Write to a temporary file in the same directory, then atomically
+        # replace the original file. This prevents partial-write corruption.
+        dir_name = os.path.dirname(os.path.abspath(self._path))
+        fd = None
+        tmp_path = None
         try:
-            self._handle.write(serialized)
-        except io.UnsupportedOperation:
-            raise IOError('Cannot write to the database. Access mode is "{0}"'.format(self._mode))
+            fd, tmp_path = tempfile.mkstemp(
+                dir=dir_name, suffix='.tmp'
+            )
+            os.write(fd, serialized.encode(self._encoding or 'utf-8'))
+            os.fsync(fd)
+            os.close(fd)
+            fd = None  # Mark as closed so cleanup doesn't double-close
 
-        # Ensure the file has been written
-        self._handle.flush()
-        os.fsync(self._handle.fileno())
+            # Close the old handle before replacing (required on Windows)
+            self._handle.close()
 
-        # Remove data that is behind the new cursor in case the file has
-        # gotten shorter
-        self._handle.truncate()
+            # Atomic replace: the old file is swapped out only once the new
+            # one is fully written and synced
+            os.replace(tmp_path, self._path)
+            tmp_path = None  # Mark as consumed so cleanup doesn't delete it
+
+        except BaseException:
+            # Clean up the temp file if it was created but not yet replaced
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            # Close the temp fd if still open
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            # Re-open the original file handle if it was closed
+            if self._handle.closed:
+                self._handle = open(
+                    self._path, mode=self._mode, encoding=self._encoding
+                )
+            raise
+
+        # Re-open the handle to the (now-replaced) file for subsequent reads
+        self._handle = open(
+            self._path, mode=self._mode, encoding=self._encoding
+        )
 
 
 class MemoryStorage(Storage):

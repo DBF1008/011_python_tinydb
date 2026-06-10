@@ -2,6 +2,7 @@ import json
 import os
 import random
 import tempfile
+from unittest.mock import patch
 
 import pytest
 
@@ -285,3 +286,96 @@ def test_json_invalid_mode_warning(tmpdir):
     path = str(tmpdir.join('test.db'))
     with pytest.warns(UserWarning, match='Using an `access_mode` other than'):
         JSONStorage(path, access_mode='w')
+
+
+def test_json_write_serialization_failure_preserves_data(tmpdir):
+    """If json.dumps fails, the existing file data must remain intact."""
+    path = str(tmpdir.join('test.db'))
+    storage = JSONStorage(path)
+
+    # Write valid data first
+    original = {'key': 'original_value'}
+    storage.write(original)
+    assert storage.read() == original
+
+    # Attempt to write non-serializable data — json.dumps should fail
+    bad_data = {'key': object()}
+    with pytest.raises(TypeError):
+        storage.write(bad_data)
+
+    # Original data must still be readable
+    assert storage.read() == original
+    storage.close()
+
+
+def test_json_write_io_failure_preserves_data(tmpdir):
+    """If the file replace step fails, existing data must not be corrupted."""
+    path = str(tmpdir.join('test.db'))
+    storage = JSONStorage(path)
+
+    # Write valid data first
+    original = {'key': 'original_value'}
+    storage.write(original)
+    assert storage.read() == original
+
+    # Mock os.replace to simulate a failure during the atomic swap
+    real_replace = os.replace
+    call_count = [0]
+
+    def failing_replace(*args, **kwargs):
+        call_count[0] += 1
+        raise OSError("Simulated replace failure")
+
+    with patch('tinydb.storages.os.replace', side_effect=failing_replace):
+        with pytest.raises(OSError, match="Simulated replace failure"):
+            storage.write({'key': 'new_value'})
+
+    assert call_count[0] == 1
+
+    # After failure, the storage handle should be re-opened and the
+    # original data should still be intact
+    assert storage.read() == original
+    storage.close()
+
+
+def test_json_write_shorter_after_longer(tmpdir):
+    """Writing shorter data after longer data must not leave trailing junk."""
+    path = str(tmpdir.join('test.db'))
+    storage = JSONStorage(path)
+
+    # Write a long payload first
+    long_data = {'key': 'x' * 10000}
+    storage.write(long_data)
+    assert storage.read() == long_data
+
+    # Write a much shorter payload — old tail must not corrupt the file
+    short_data = {'k': 1}
+    storage.write(short_data)
+    assert storage.read() == short_data
+
+    # Verify the raw file content is valid JSON with no trailing data
+    with open(path, 'r') as f:
+        raw = f.read()
+    assert json.loads(raw) == short_data
+    storage.close()
+
+
+def test_json_write_read_only_mode(tmpdir):
+    """Writing in read-only mode must raise IOError without touching the file."""
+    path = str(tmpdir.join('test.db'))
+
+    # Create the database with some data
+    storage = JSONStorage(path)
+    storage.write({'key': 'value'})
+    storage.close()
+
+    # Re-open in read-only mode
+    ro_storage = JSONStorage(path, access_mode='r')
+    assert ro_storage.read() == {'key': 'value'}
+
+    with pytest.raises(IOError, match='Cannot write'):
+        ro_storage.write({'key': 'new'})
+
+    # Original data must be unchanged
+    assert ro_storage.read() == {'key': 'value'}
+    ro_storage.close()
