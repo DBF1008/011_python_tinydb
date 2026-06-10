@@ -285,3 +285,75 @@ def test_json_invalid_mode_warning(tmpdir):
     path = str(tmpdir.join('test.db'))
     with pytest.warns(UserWarning, match='Using an `access_mode` other than'):
         JSONStorage(path, access_mode='w')
+
+
+def test_json_write_preserves_data_on_serialization_failure(tmpdir):
+    """If json.dumps fails (e.g. bad custom default), the file must not change."""
+    path = str(tmpdir.join('test.db'))
+    storage = JSONStorage(path)
+
+    original = {'_default': {'1': {'a': 1}}}
+    storage.write(original)
+    assert storage.read() == original
+
+    def bad_default(obj):
+        raise TypeError("unsupported")
+
+    storage.kwargs['default'] = bad_default
+
+    with pytest.raises(TypeError):
+        storage.write({'_default': {'1': {'a': 1, 'bad': object()}}})
+
+    # Original data must still be intact
+    assert storage.read() == original
+    storage.close()
+
+
+def test_json_write_restores_data_on_io_failure(tmpdir):
+    """If the underlying file write fails mid-way, restore the original."""
+    path = str(tmpdir.join('test.db'))
+    storage = JSONStorage(path)
+
+    original = {'_default': {'1': {'x': 42}}}
+    storage.write(original)
+    assert storage.read() == original
+
+    # Patch the file handle's write to fail after being called
+    real_write = storage._handle.write
+
+    def failing_write(data):
+        raise OSError("disk full")
+
+    storage._handle.write = failing_write
+
+    with pytest.raises(OSError):
+        storage.write({'_default': {'1': {'x': 99}}})
+
+    # Restore the real write so recovery and read work
+    storage._handle.write = real_write
+
+    # Original data should have been recovered
+    assert storage.read() == original
+    storage.close()
+
+
+def test_json_write_shorter_data(tmpdir):
+    """Regression: writing shorter data must not leave trailing garbage."""
+    path = str(tmpdir.join('test.db'))
+    storage = JSONStorage(path)
+
+    long_data = {'_default': {'1': {'name': 'A very long entry here'}}}
+    storage.write(long_data)
+
+    short_data = {'_default': {'1': {'n': 1}}}
+    storage.write(short_data)
+
+    assert storage.read() == short_data
+
+    # Verify the raw file has no trailing garbage
+    storage._handle.seek(0)
+    raw = storage._handle.read()
+    parsed = json.loads(raw)
+    assert parsed == short_data
+
+    storage.close()

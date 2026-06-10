@@ -140,25 +140,39 @@ class JSONStorage(Storage):
             return json.load(self._handle)
 
     def write(self, data: dict[str, dict[str, Any]]):
-        # Move the cursor to the beginning of the file just in case
-        self._handle.seek(0)
-
-        # Serialize the database state using the user-provided arguments
+        # Serialize first — if this fails, the file is untouched
         serialized = json.dumps(data, **self.kwargs)
 
-        # Write the serialized data to the file
+        # Back up current file contents so we can restore on failure
+        self._handle.seek(0)
+        original_data = self._handle.read()
+
+        self._handle.seek(0)
         try:
-            self._handle.write(serialized)
-        except io.UnsupportedOperation:
-            raise IOError('Cannot write to the database. Access mode is "{0}"'.format(self._mode))
+            try:
+                self._handle.write(serialized)
+            except io.UnsupportedOperation:
+                raise IOError(
+                    'Cannot write to the database. Access mode is "{}"'
+                    .format(self._mode)
+                )
 
-        # Ensure the file has been written
-        self._handle.flush()
-        os.fsync(self._handle.fileno())
-
-        # Remove data that is behind the new cursor in case the file has
-        # gotten shorter
-        self._handle.truncate()
+            # Truncate before flushing so the on-disk file is never left
+            # with trailing garbage from a previous, longer write
+            self._handle.truncate()
+            self._handle.flush()
+            os.fsync(self._handle.fileno())
+        except Exception:
+            # Write failed — attempt to restore the original content so
+            # the on-disk file is not left in a half-written state
+            try:
+                self._handle.seek(0)
+                self._handle.write(original_data)
+                self._handle.truncate()
+                self._handle.flush()
+            except Exception:
+                pass
+            raise
 
 
 class MemoryStorage(Storage):

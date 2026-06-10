@@ -120,8 +120,10 @@ class CachingMiddleware(Middleware):
             self._cache_modified_count = 0
 
     def close(self):
-        # Flush potentially unwritten data
-        self.flush()
-
-        # Let the storage clean up too
-        self.storage.close()
+        # Flush potentially unwritten data, but always close the
+        # underlying storage even if flush raises — otherwise the file
+        # handle leaks and subsequent retries cannot reopen the file.
+        try:
+            self.flush()
+        finally:
+            self.storage.close()
