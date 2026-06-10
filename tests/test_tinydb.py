@@ -312,6 +312,55 @@ def test_doc_id_missing_consistency(db: TinyDB):
     assert db.remove(doc_ids=[99]) == []
 
 
+def test_get_duplicate_doc_ids(db: TinyDB):
+    # Duplicate IDs in the input should not produce duplicate documents
+    # in the result.
+    result = db.get(doc_ids=[1, 1, 2, 2])
+    assert sorted(d.doc_id for d in result) == [1, 2]
+
+
+def test_update_duplicate_doc_ids(db: TinyDB):
+    # Duplicate IDs should cause the update to be applied exactly once
+    # per unique ID.  The returned list must not contain duplicates.
+    counter = {'n': 0}
+
+    def increment(doc):
+        doc['int'] += 1
+        counter['n'] += 1
+
+    ids = db.update(increment, doc_ids=[1, 1, 2, 2, 2])
+    assert sorted(ids) == [1, 2]
+    # The callback must have been called exactly twice (once per unique ID)
+    assert counter['n'] == 2
+    assert db.get(doc_id=1)['int'] == 2
+    assert db.get(doc_id=2)['int'] == 2
+    # Untouched document
+    assert db.get(doc_id=3)['int'] == 1
+
+
+def test_remove_duplicate_doc_ids(db: TinyDB):
+    # Duplicate IDs must not cause a KeyError and the returned list
+    # must not contain duplicates.
+    ids = db.remove(doc_ids=[1, 1, 2, 2, 2])
+    assert sorted(ids) == [1, 2]
+    assert len(db) == 1
+    assert db.get(doc_id=3) is not None
+
+
+def test_duplicate_and_missing_doc_ids(db: TinyDB):
+    # Combination of duplicates and non-existent IDs: each existing ID
+    # is processed exactly once; missing IDs are silently ignored.
+    ids = db.update({'int': 9}, doc_ids=[1, 99, 1, 99, 2])
+    assert sorted(ids) == [1, 2]
+    assert db.get(doc_id=1)['int'] == 9
+    assert db.get(doc_id=2)['int'] == 9
+    assert db.get(doc_id=3)['int'] == 1
+
+    ids = db.remove(doc_ids=[1, 99, 1, 99, 2])
+    assert sorted(ids) == [1, 2]
+    assert len(db) == 1
+
+
 def test_update_multiple(db: TinyDB):
     assert len(db) == 3
 
