@@ -181,9 +181,17 @@ class Table:
         :param documents: an Iterable of documents to insert
         :returns: a list containing the inserted documents' IDs
         """
-        doc_ids = []
+        doc_ids: list[int] = []
 
         def updater(table: dict):
+            # Compute the next available ID from the live table so that
+            # manually specified doc_ids (via Document objects) and
+            # auto-assigned IDs never collide within the same batch.
+            if table:
+                next_id = max(table.keys()) + 1
+            else:
+                next_id = 1
+
             for document in documents:
 
                 # Make sure the document implements the ``Mapping`` interface
@@ -198,20 +206,29 @@ class Table:
                             f'already exists'
                         )
 
-                    # Store the doc_id, so we can return all document IDs
-                    # later. Then save the document with its doc_id and
-                    # skip the rest of the current loop
                     doc_id = document.doc_id
                     doc_ids.append(doc_id)
                     table[doc_id] = dict(document)
+
+                    # Keep next_id ahead of any manually specified ID so
+                    # subsequent auto-assigned IDs won't collide
+                    if doc_id >= next_id:
+                        next_id = doc_id + 1
+
                     continue
 
-                # Generate new document ID for this document
-                # Store the doc_id, so we can return all document IDs
-                # later, then save the document with the new doc_id
-                doc_id = self._get_next_id()
+                # Auto-assign: skip IDs that are already taken (e.g. by a
+                # Document earlier in this batch)
+                while next_id in table:
+                    next_id += 1
+
+                doc_id = next_id
+                next_id += 1
                 doc_ids.append(doc_id)
                 table[doc_id] = dict(document)
+
+            # Persist the next ID so subsequent single inserts stay correct
+            self._next_id = next_id
 
         # See below for details on ``Table._update``
         self._update_table(updater)

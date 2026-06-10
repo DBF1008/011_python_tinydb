@@ -122,6 +122,119 @@ def test_insert_multiple_with_doc_ids(db: TinyDB):
         db.insert_multiple([Document({'int': 1, 'char': 'a'}, 12)])
 
 
+def test_insert_multiple_mixed_doc_id_first(db: TinyDB):
+    """Document with manual doc_id followed by plain dicts."""
+    db.drop_tables()
+    ids = db.insert_multiple([
+        Document({'v': 'a'}, 5),
+        {'v': 'b'},
+        {'v': 'c'},
+    ])
+    assert ids == [5, 6, 7]
+    assert db.get(doc_id=5) == {'v': 'a'}
+    assert db.get(doc_id=6) == {'v': 'b'}
+    assert db.get(doc_id=7) == {'v': 'c'}
+
+
+def test_insert_multiple_mixed_dict_first(db: TinyDB):
+    """Plain dicts followed by a Document with a high manual doc_id."""
+    db.drop_tables()
+    ids = db.insert_multiple([
+        {'v': 'a'},
+        {'v': 'b'},
+        Document({'v': 'c'}, 10),
+        {'v': 'd'},
+    ])
+    assert ids == [1, 2, 10, 11]
+    assert len(db) == 4
+
+
+def test_insert_multiple_mixed_interleaved(db: TinyDB):
+    """Interleaved Documents and dicts, auto IDs must skip taken slots."""
+    db.drop_tables()
+    ids = db.insert_multiple([
+        {'v': 'a'},              # auto -> 1
+        Document({'v': 'b'}, 3), # manual 3
+        {'v': 'c'},              # auto -> should skip 2? no, 2 is free -> 2?
+    ])
+    # next_id after auto 1 is 2; Document 3 bumps next_id to 4;
+    # next auto uses 4
+    assert ids == [1, 3, 4]
+    assert db.get(doc_id=1) == {'v': 'a'}
+    assert db.get(doc_id=3) == {'v': 'b'}
+    assert db.get(doc_id=4) == {'v': 'c'}
+
+
+def test_insert_multiple_mixed_no_id_collision(db: TinyDB):
+    """Auto ID must not silently overwrite a Document inserted earlier."""
+    db.drop_tables()
+    ids = db.insert_multiple([
+        {'v': 'a'},              # auto -> 1
+        Document({'v': 'b'}, 2), # manual 2
+        {'v': 'c'},              # auto -> must NOT be 2
+    ])
+    assert len(set(ids)) == len(ids), "IDs must be unique"
+    assert len(db) == 3
+    # The Document at id=2 must still contain its original data
+    assert db.get(doc_id=2) == {'v': 'b'}
+
+
+def test_insert_multiple_mixed_then_single_insert(db: TinyDB):
+    """After a mixed insert_multiple, a plain insert must get a correct ID."""
+    db.drop_tables()
+    db.insert_multiple([
+        Document({'v': 'a'}, 5),
+        {'v': 'b'},
+    ])
+    # next single insert should get 7
+    new_id = db.insert({'v': 'c'})
+    assert new_id == 7
+    assert len(db) == 3
+
+
+def test_insert_multiple_mixed_reopen_json(tmp_path):
+    """After reopen, next_id must account for all previously used IDs."""
+    path = str(tmp_path / 'test.db')
+
+    db = TinyDB(path)
+    db.insert_multiple([
+        Document({'v': 'a'}, 10),
+        {'v': 'b'},
+    ])
+    db.close()
+
+    db = TinyDB(path)
+    new_id = db.insert({'v': 'c'})
+    assert new_id == 12
+    assert len(db) == 3
+    db.close()
+
+
+def test_insert_multiple_mixed_duplicate_in_batch(db: TinyDB):
+    """A Document whose doc_id collides with an auto ID in the same batch."""
+    db.drop_tables()
+    with pytest.raises(ValueError):
+        db.insert_multiple([
+            {'v': 'a'},              # auto -> 1
+            Document({'v': 'b'}, 1), # conflicts with auto 1
+        ])
+
+
+def test_upsert_after_mixed_insert_multiple(db: TinyDB):
+    """upsert inserting a new Document after a mixed batch."""
+    db.drop_tables()
+    db.insert_multiple([
+        Document({'v': 'a'}, 5),
+        {'v': 'b'},
+    ])
+    # upsert a new document that doesn't exist yet
+    result = db.upsert(Document({'v': 'new'}, 20), where('v') == 'nonexistent')
+    assert result == [20]
+    # next auto insert must be past 20
+    new_id = db.insert({'v': 'z'})
+    assert new_id == 21
+
+
 def test_insert_invalid_type_raises_error(db: TinyDB):
     with pytest.raises(ValueError, match='Document is not a Mapping'):
         # object() as an example of a non-mapping-type
