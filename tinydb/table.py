@@ -436,10 +436,10 @@ class Table:
             # Perform the update operation for documents specified by a list
             # of document IDs. Document IDs that don't exist in the table are
             # silently skipped, mirroring the behaviour of ``get(doc_ids=...)``
-            # (see issue #591). The list of *actually* updated IDs is
-            # determined inside the updater so it reflects the table state at
-            # write time.
-            requested_ids = list(doc_ids)
+            # (see issue #591). Duplicate IDs are collapsed so each document
+            # is updated exactly once and the returned list is clean.
+            # ``dict.fromkeys`` preserves the first-seen order while deduplicating.
+            requested_ids = list(dict.fromkeys(doc_ids))
             updated_ids: list[int] = []
 
             def updater(table: dict):
@@ -619,10 +619,10 @@ class Table:
             # This function returns the list of IDs for the documents that
             # have been removed. Document IDs that don't exist in the table
             # are silently skipped, mirroring the behaviour of
-            # ``get(doc_ids=...)`` (see issue #591). The list of *actually*
-            # removed IDs is determined inside the updater so it reflects the
-            # table state at write time.
-            requested_ids = list(doc_ids)
+            # ``get(doc_ids=...)`` (see issue #591). Duplicate IDs are
+            # collapsed so each document is deleted exactly once and the
+            # returned list is clean.
+            requested_ids = list(dict.fromkeys(doc_ids))
             removed_ids: list[int] = []
 
             def updater(table: dict):
